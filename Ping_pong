@@ -1,1 +1,450 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>PING PONG</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Orbitron:wght@400;700;900&family=Share+Tech+Mono&display=swap');
+
+  :root {
+    --neon-cyan: #00f5ff;
+    --neon-pink: #ff006e;
+    --neon-yellow: #ffe500;
+    --dark: #050510;
+    --mid: #0a0a1a;
+    --glow-cyan: 0 0 10px #00f5ff, 0 0 30px #00f5ff55, 0 0 60px #00f5ff22;
+    --glow-pink: 0 0 10px #ff006e, 0 0 30px #ff006e55, 0 0 60px #ff006e22;
+  }
+
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+
+  body {
+    background: var(--dark);
+    font-family: 'Orbitron', monospace;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    min-height: 100vh;
+    overflow: hidden;
+    color: white;
+  }
+
+  /* Scanline overlay */
+  body::before {
+    content: '';
+    position: fixed;
+    inset: 0;
+    background: repeating-linear-gradient(
+      to bottom,
+      transparent 0px,
+      transparent 3px,
+      rgba(0,0,0,0.15) 3px,
+      rgba(0,0,0,0.15) 4px
+    );
+    pointer-events: none;
+    z-index: 100;
+  }
+
+  /* Grid background */
+  body::after {
+    content: '';
+    position: fixed;
+    inset: 0;
+    background-image:
+      linear-gradient(rgba(0,245,255,0.04) 1px, transparent 1px),
+      linear-gradient(90deg, rgba(0,245,255,0.04) 1px, transparent 1px);
+    background-size: 40px 40px;
+    pointer-events: none;
+    z-index: 0;
+  }
+
+  .wrapper {
+    position: relative;
+    z-index: 10;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 12px;
+  }
+
+  h1 {
+    font-size: 2rem;
+    font-weight: 900;
+    letter-spacing: 0.3em;
+    color: var(--neon-cyan);
+    text-shadow: var(--glow-cyan);
+    text-transform: uppercase;
+    margin-bottom: 4px;
+  }
+
+  .scoreboard {
+    display: flex;
+    align-items: center;
+    gap: 32px;
+    font-family: 'Share Tech Mono', monospace;
+    font-size: 2.4rem;
+    margin-bottom: 4px;
+  }
+
+  .score-player {
+    color: var(--neon-cyan);
+    text-shadow: var(--glow-cyan);
+  }
+
+  .score-cpu {
+    color: var(--neon-pink);
+    text-shadow: var(--glow-pink);
+  }
+
+  .score-sep {
+    color: #ffffff33;
+    font-size: 2rem;
+  }
+
+  .player-labels {
+    display: flex;
+    justify-content: space-between;
+    width: 680px;
+    font-size: 0.6rem;
+    letter-spacing: 0.25em;
+    color: #ffffff44;
+    text-transform: uppercase;
+    margin-bottom: 2px;
+  }
+
+  .canvas-wrap {
+    position: relative;
+  }
+
+  canvas {
+    display: block;
+    border: 1px solid rgba(0,245,255,0.2);
+    box-shadow:
+      0 0 0 1px rgba(0,245,255,0.1),
+      0 0 40px rgba(0,245,255,0.08),
+      inset 0 0 80px rgba(0,0,0,0.5);
+    background: var(--mid);
+  }
+
+  .msg-overlay {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    background: rgba(5,5,16,0.85);
+    backdrop-filter: blur(4px);
+  }
+
+  .msg-overlay h2 {
+    font-size: 1.6rem;
+    font-weight: 900;
+    letter-spacing: 0.2em;
+    color: var(--neon-yellow);
+    text-shadow: 0 0 10px #ffe500, 0 0 40px #ffe50055;
+    margin-bottom: 12px;
+    text-transform: uppercase;
+  }
+
+  .msg-overlay p {
+    font-size: 0.65rem;
+    letter-spacing: 0.3em;
+    color: #ffffff66;
+    text-transform: uppercase;
+    margin-bottom: 24px;
+  }
+
+  .btn {
+    padding: 10px 36px;
+    border: 1px solid var(--neon-cyan);
+    background: transparent;
+    color: var(--neon-cyan);
+    font-family: 'Orbitron', monospace;
+    font-size: 0.75rem;
+    font-weight: 700;
+    letter-spacing: 0.25em;
+    text-transform: uppercase;
+    cursor: pointer;
+    box-shadow: var(--glow-cyan);
+    transition: background 0.2s, color 0.2s;
+  }
+
+  .btn:hover {
+    background: var(--neon-cyan);
+    color: var(--dark);
+  }
+
+  .controls-hint {
+    font-family: 'Share Tech Mono', monospace;
+    font-size: 0.6rem;
+    letter-spacing: 0.2em;
+    color: #ffffff22;
+    text-transform: uppercase;
+    margin-top: 6px;
+  }
+
+  .win-text.player { color: var(--neon-cyan); text-shadow: var(--glow-cyan); }
+  .win-text.cpu    { color: var(--neon-pink);  text-shadow: var(--glow-pink); }
+</style>
+</head>
+<body>
+<div class="wrapper">
+  <h1>Ping Pong</h1>
+
+  <div class="scoreboard">
+    <span class="score-player" id="scorePlayer">00</span>
+    <span class="score-sep">:</span>
+    <span class="score-cpu" id="scoreCpu">00</span>
+  </div>
+
+  <div class="player-labels">
+    <span>▶ You</span>
+    <span>CPU ◀</span>
+  </div>
+
+  <div class="canvas-wrap">
+    <canvas id="c" width="680" height="420"></canvas>
+
+    <div class="msg-overlay" id="overlay">
+      <h2 id="overlayTitle">Ready?</h2>
+      <p id="overlaySubtitle">W / S or mouse to move your paddle</p>
+      <button class="btn" id="startBtn">Start Game</button>
+    </div>
+  </div>
+
+  <div class="controls-hint">W/S or Mouse · First to 10 wins</div>
+</div>
+
+<script>
+const canvas = document.getElementById('c');
+const ctx = canvas.getContext('2d');
+const W = canvas.width, H = canvas.height;
+
+const PADDLE_W = 10, PADDLE_H = 80, BALL_R = 7;
+const WIN_SCORE = 10;
+
+let state = 'idle'; // idle | playing | paused | over
+let scoreP = 0, scoreC = 0;
+let keys = {};
+
+let player, cpu, ball;
+
+function initGame() {
+  player = { x: 18, y: H/2 - PADDLE_H/2, w: PADDLE_W, h: PADDLE_H, dy: 0 };
+  cpu    = { x: W - 18 - PADDLE_W, y: H/2 - PADDLE_H/2, w: PADDLE_W, h: PADDLE_H };
+  resetBall();
+}
+
+function resetBall(dir = 1) {
+  const angle = (Math.random() * 60 - 30) * Math.PI / 180;
+  const speed = 13;
+  ball = {
+    x: W/2, y: H/2,
+    vx: Math.cos(angle) * speed * dir,
+    vy: Math.sin(angle) * speed,
+    trail: []
+  };
+}
+
+// Mouse control
+canvas.addEventListener('mousemove', e => {
+  if (state !== 'playing') return;
+  const rect = canvas.getBoundingClientRect();
+  const my = e.clientY - rect.top;
+  player.y = my - PADDLE_H/2;
+});
+
+window.addEventListener('keydown', e => { keys[e.key] = true; });
+window.addEventListener('keyup',   e => { keys[e.key] = false; });
+
+document.getElementById('startBtn').addEventListener('click', startGame);
+
+function startGame() {
+  scoreP = 0; scoreC = 0;
+  updateScore();
+  initGame();
+  state = 'playing';
+  hideOverlay();
+}
+
+function hideOverlay() {
+  document.getElementById('overlay').style.display = 'none';
+}
+
+function showOverlay(title, subtitle, btn, winClass='') {
+  const ov = document.getElementById('overlay');
+  ov.style.display = 'flex';
+  const t = document.getElementById('overlayTitle');
+  t.textContent = title;
+  t.className = 'win-text ' + winClass;
+  document.getElementById('overlaySubtitle').textContent = subtitle;
+  document.getElementById('startBtn').textContent = btn;
+}
+
+function updateScore() {
+  document.getElementById('scorePlayer').textContent = String(scoreP).padStart(2,'0');
+  document.getElementById('scoreCpu').textContent    = String(scoreC).padStart(2,'0');
+}
+
+function clamp(v, lo, hi) { return Math.max(lo, Math.min(hi, v)); }
+
+function movePaddles() {
+  // Player keyboard
+  if (keys['w'] || keys['W'] || keys['ArrowUp'])   player.y -= 5;
+  if (keys['s'] || keys['S'] || keys['ArrowDown'])  player.y += 5;
+  player.y = clamp(player.y, 0, H - PADDLE_H);
+
+  // CPU AI
+  const cpuCenterY = cpu.y + PADDLE_H/2;
+  const diff = ball.y - cpuCenterY;
+  const cpuSpeed = 4.2;
+  cpu.y += clamp(diff, -cpuSpeed, cpuSpeed);
+  cpu.y = clamp(cpu.y, 0, H - PADDLE_H);
+}
+
+function moveBall() {
+  // Trail
+  ball.trail.push({ x: ball.x, y: ball.y });
+  if (ball.trail.length > 12) ball.trail.shift();
+
+  ball.x += ball.vx;
+  ball.y += ball.vy;
+
+  // Wall bounce top/bottom
+  if (ball.y - BALL_R <= 0)      { ball.y = BALL_R;      ball.vy *= -1; }
+  if (ball.y + BALL_R >= H)      { ball.y = H - BALL_R;  ball.vy *= -1; }
+
+  // Paddle collision helper
+  function hitPaddle(p) {
+    return ball.x - BALL_R < p.x + p.w &&
+           ball.x + BALL_R > p.x &&
+           ball.y - BALL_R < p.y + p.h &&
+           ball.y + BALL_R > p.y;
+  }
+
+  if (hitPaddle(player) && ball.vx < 0) {
+    ball.vx = Math.abs(ball.vx) * 1.05;
+    const rel = (ball.y - (player.y + PADDLE_H/2)) / (PADDLE_H/2);
+    ball.vy = rel * 6;
+    ball.x = player.x + player.w + BALL_R;
+  }
+
+  if (hitPaddle(cpu) && ball.vx > 0) {
+    ball.vx = -Math.abs(ball.vx) * 1.05;
+    const rel = (ball.y - (cpu.y + PADDLE_H/2)) / (PADDLE_H/2);
+    ball.vy = rel * 6;
+    ball.x = cpu.x - BALL_R;
+  }
+
+  // Clamp speed
+  const spd = Math.hypot(ball.vx, ball.vy);
+  if (spd > 28) { ball.vx = ball.vx/spd*28; ball.vy = ball.vy/spd*28; }
+
+  // Scoring
+  if (ball.x < 0) {
+    scoreC++;
+    updateScore();
+    checkWin() || resetBall(-1);
+  }
+  if (ball.x > W) {
+    scoreP++;
+    updateScore();
+    checkWin() || resetBall(1);
+  }
+}
+
+function checkWin() {
+  if (scoreP >= WIN_SCORE) {
+    state = 'over';
+    showOverlay('You Win!', `Final: ${scoreP} — ${scoreC}`, 'Play Again', 'player');
+    return true;
+  }
+  if (scoreC >= WIN_SCORE) {
+    state = 'over';
+    showOverlay('CPU Wins', `Final: ${scoreP} — ${scoreC}`, 'Try Again', 'cpu');
+    return true;
+  }
+  return false;
+}
+
+/* ---- Drawing ---- */
+function drawRect(x, y, w, h, color, glow) {
+  ctx.save();
+  if (glow) ctx.shadowColor = glow, ctx.shadowBlur = 18;
+  ctx.fillStyle = color;
+  ctx.fillRect(x, y, w, h);
+  ctx.restore();
+}
+
+function drawBall() {
+  // Trail
+  ball.trail.forEach((p, i) => {
+    const alpha = (i / ball.trail.length) * 0.4;
+    const r = BALL_R * (i / ball.trail.length) * 0.8;
+    ctx.beginPath();
+    ctx.arc(p.x, p.y, r, 0, Math.PI * 2);
+    ctx.fillStyle = `rgba(0,245,255,${alpha})`;
+    ctx.fill();
+  });
+
+  // Ball glow
+  ctx.save();
+  ctx.shadowColor = '#00f5ff';
+  ctx.shadowBlur = 24;
+  ctx.beginPath();
+  ctx.arc(ball.x, ball.y, BALL_R, 0, Math.PI * 2);
+  ctx.fillStyle = '#ffffff';
+  ctx.fill();
+  ctx.restore();
+}
+
+function drawNet() {
+  const segH = 18, gap = 8;
+  for (let y = 0; y < H; y += segH + gap) {
+    ctx.fillStyle = 'rgba(255,255,255,0.06)';
+    ctx.fillRect(W/2 - 1, y, 2, segH);
+  }
+}
+
+function draw() {
+  // Background
+  ctx.clearRect(0, 0, W, H);
+  ctx.fillStyle = '#0a0a1a';
+  ctx.fillRect(0, 0, W, H);
+
+  drawNet();
+
+  // Subtle court glow
+  const grad = ctx.createRadialGradient(W/2, H/2, 10, W/2, H/2, 280);
+  grad.addColorStop(0, 'rgba(0,245,255,0.03)');
+  grad.addColorStop(1, 'transparent');
+  ctx.fillStyle = grad;
+  ctx.fillRect(0, 0, W, H);
+
+  // Paddles
+  drawRect(player.x, player.y, PADDLE_W, PADDLE_H, '#00f5ff', '#00f5ff');
+  drawRect(cpu.x,    cpu.y,    PADDLE_W, PADDLE_H, '#ff006e', '#ff006e');
+
+  drawBall();
+}
+
+function loop() {
+  if (state === 'playing') {
+    movePaddles();
+    moveBall();
+    draw();
+  }
+  requestAnimationFrame(loop);
+}
+
+// Initial draw
+initGame();
+draw();
+loop();
+</script>
+</body>
+</html>
 
