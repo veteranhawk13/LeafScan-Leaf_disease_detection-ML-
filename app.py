@@ -85,6 +85,11 @@ html,body,[data-testid="stAppViewContainer"]{background-color:#0d1a0f!important;
 .auto-enh{display:inline-flex;align-items:center;gap:8px;background:#061a0a;border:1px solid #1e4a22;border-radius:10px;padding:8px 14px;font-size:12px;color:#4dba60;margin-bottom:12px}
 .enh-dot{width:6px;height:6px;border-radius:50%;background:#4aa354;animation:pulse-dot 1.5s infinite}
 
+.orig-badge{display:inline-flex;align-items:center;gap:8px;background:#1a1608;border:1px solid #4a3e1e;border-radius:10px;padding:8px 14px;font-size:12px;color:#e8c34d;margin-bottom:12px}
+
+[data-testid="stRadio"] > div{flex-direction:row!important;gap:10px!important}
+[data-testid="stRadio"] label{background:#0f2213!important;border:1px solid #1e3a20!important;border-radius:10px!important;padding:8px 16px!important;font-size:13px!important;color:#a8d4aa!important}
+
 .img-metrics{display:grid;grid-template-columns:repeat(4,1fr);gap:7px;margin-top:12px}
 .img-metric{background:#0f2213;border:1px solid #1a3a1d;border-radius:10px;padding:10px 12px}
 .im-label{font-size:9px;font-weight:600;letter-spacing:.12em;text-transform:uppercase;color:#3d6b40;margin-bottom:4px}
@@ -146,7 +151,7 @@ hr{border-color:#1e3a20!important}
 """, unsafe_allow_html=True)
 
 # =====================================================
-# AUTO-ENHANCEMENT (always applied, silent)
+# AUTO-ENHANCEMENT (always computed, user can toggle view)
 # =====================================================
 def auto_enhance(pil_img):
     arr = cv2.cvtColor(np.array(pil_img), cv2.COLOR_RGB2BGR)
@@ -164,6 +169,47 @@ def auto_enhance(pil_img):
         cv2.cvtColor(np.array(enh), cv2.COLOR_RGB2BGR),
         None, h=4, hColor=4, templateWindowSize=7, searchWindowSize=21)
     return Image.fromarray(cv2.cvtColor(d, cv2.COLOR_BGR2RGB))
+
+# =====================================================
+# DEBLUR — Wiener deconvolution against an assumed Gaussian
+# point-spread function, followed by a light unsharp pass.
+# This actually inverts blur (rather than just faking sharper
+# edges like unsharp masking alone), so it helps genuine
+# out-of-focus / motion-soft photos more than auto_enhance does.
+# =====================================================
+def deblur_image(pil_img, kernel_size=9, kernel_sigma=3.0, K=0.015):
+    arr = cv2.cvtColor(np.array(pil_img), cv2.COLOR_RGB2BGR).astype(np.float32)
+    h, w = arr.shape[:2]
+
+    k1d = cv2.getGaussianKernel(kernel_size, kernel_sigma)
+    kernel = (k1d @ k1d.T)
+    kernel /= kernel.sum()
+
+    kh, kw = kernel.shape
+    kernel_padded = np.zeros((h, w), dtype=np.float32)
+    kernel_padded[:kh, :kw] = kernel
+    kernel_padded = np.roll(kernel_padded, -(kh // 2), axis=0)
+    kernel_padded = np.roll(kernel_padded, -(kw // 2), axis=1)
+    H = np.fft.fft2(kernel_padded)
+    H_conj = np.conj(H)
+    H_pow  = np.abs(H) ** 2
+
+    def wiener_channel(channel):
+        G = np.fft.fft2(channel)
+        F_hat = (H_conj / (H_pow + K)) * G
+        out = np.real(np.fft.ifft2(F_hat))
+        return np.clip(out, 0, 255)
+
+    b, g, r = cv2.split(arr)
+    deconv = cv2.merge([wiener_channel(b), wiener_channel(g), wiener_channel(r)]).astype(np.uint8)
+    result = Image.fromarray(cv2.cvtColor(deconv, cv2.COLOR_BGR2RGB))
+
+    # Light unsharp pass to reinforce edges the deconvolution recovered
+    blur = result.filter(ImageFilter.GaussianBlur(radius=1))
+    rr = np.array(result, dtype=np.float32)
+    bb = np.array(blur, dtype=np.float32)
+    sharpened = np.clip(rr + 0.5 * (rr - bb), 0, 255).astype(np.uint8)
+    return Image.fromarray(sharpened)
 
 # =====================================================
 # VISUAL EVIDENCE ANALYSER
@@ -383,6 +429,11 @@ st.markdown('<div class="upload-section">', unsafe_allow_html=True)
 col_upload, col_result = st.columns([1,1], gap="large")
 
 # ── LEFT ─────────────────────────────────────────────
+# display_img / use_enhanced are set inside this block and read again
+# below in col_result (Streamlit `with` blocks share the same script scope).
+display_img  = None
+use_enhanced = True
+
 with col_upload:
     st.markdown("""
     <div class="section-label">Step 1</div>
@@ -409,15 +460,56 @@ with col_upload:
             ico = "✕" if lvl=="error" else "⚠"
             st.markdown(f'<div class="{cls}"><span>{ico}</span><span>{msg}</span></div>', unsafe_allow_html=True)
 
-        enh_img = auto_enhance(raw_img)
+        enh_img    = auto_enhance(raw_img)
+        blur_score = float(cv2.Laplacian(cv2.cvtColor(np.array(raw_img), cv2.COLOR_RGB2GRAY), cv2.CV_64F).var())
+        deblur_img = deblur_image(raw_img) if blur_score < 150 else None
 
-        st.markdown("""
-        <div class="auto-enh">
-            <div class="enh-dot"></div>
-            Auto-enhanced · CLAHE · Unsharp Mask · Saturation · Denoise
-        </div>
-        """, unsafe_allow_html=True)
-        st.image(enh_img, use_container_width=True)
+        # ── Original vs Auto-Enhanced vs De-blurred toggle ──
+        st.markdown("<div class='section-label' style='margin-top:6px;'>Image Version</div>", unsafe_allow_html=True)
+        version_options = ["✨ Auto-Enhanced", "📷 Original"]
+        if deblur_img is not None:
+            version_options.insert(1, "🩹 De-blurred")
+        img_choice = st.radio(
+            "Choose image version",
+            version_options,
+            horizontal=True,
+            label_visibility="collapsed",
+            key="img_choice"
+        )
+        use_enhanced = img_choice.startswith("✨")
+        use_deblur   = img_choice.startswith("🩹")
+
+        if use_deblur:
+            display_img = deblur_img
+        elif use_enhanced:
+            display_img = enh_img
+        else:
+            display_img = raw_img
+
+        if use_deblur:
+            st.markdown("""
+            <div class="orig-badge" style="background:#0a1a1c;border-color:#1e4a4a;color:#4dd4ba;">
+                🩹 De-blurred · Wiener deconvolution + light sharpen
+            </div>
+            """, unsafe_allow_html=True)
+        elif use_enhanced:
+            st.markdown("""
+            <div class="auto-enh">
+                <div class="enh-dot"></div>
+                Auto-enhanced · CLAHE · Unsharp Mask · Saturation · Denoise
+            </div>
+            """, unsafe_allow_html=True)
+        else:
+            st.markdown("""
+            <div class="orig-badge">
+                📷 Showing original, unprocessed image
+            </div>
+            """, unsafe_allow_html=True)
+
+        if deblur_img is None:
+            st.markdown("<p style='font-size:11px;color:#3d6b40;margin-bottom:10px;'>Image is already sharp enough — de-blur option skipped.</p>", unsafe_allow_html=True)
+
+        st.image(display_img, use_container_width=True)
 
         m = metrics
         st.markdown(f"""
@@ -455,12 +547,12 @@ with col_result:
         else:
             with st.spinner("Analysing leaf tissue, spots, and colour patterns…"):
                 time.sleep(0.3)
-                arr        = preprocess_img(enh_img)
+                arr        = preprocess_img(display_img)
                 prediction = model.predict(arr)
                 pred_idx   = int(np.argmax(prediction))
                 pred_class = class_names[pred_idx]
                 raw_pct    = float(np.max(prediction)*100)
-                ev         = analyse_visual_evidence(enh_img)
+                ev         = analyse_visual_evidence(display_img)
                 cal_conf, ev_boost = calibrated_confidence(raw_pct, ev, pred_class)
                 sorted_sc  = np.sort(prediction[0])[::-1]
                 top2_gap   = float((sorted_sc[0]-sorted_sc[1])*100)
@@ -480,6 +572,7 @@ with col_result:
                 <div class="cfg-item"><div class="cfg-lbl">Val Accuracy</div><div class="cfg-val">{VAL_ACC}%</div></div>
                 <div class="cfg-item"><div class="cfg-lbl">Preprocessor</div><div class="cfg-val">mobilenet_v2</div></div>
                 <div class="cfg-item"><div class="cfg-lbl">Classes</div><div class="cfg-val">{NUM_CLASSES}</div></div>
+                <div class="cfg-item"><div class="cfg-lbl">Image Used</div><div class="cfg-val">{"De-blurred" if use_deblur else "Enhanced" if use_enhanced else "Original"}</div></div>
             </div>
             """, unsafe_allow_html=True)
 
